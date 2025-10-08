@@ -38,18 +38,18 @@ from browser_use.tools.views import (
 	CloseTabAction,
 	DoneAction,
 	GetDropdownOptionsAction,
-	GoToUrlAction,
 	InputTextAction,
+	NavigateAction,
 	NoParamsAction,
 	ScrollAction,
-	SearchGoogleAction,
+	SearchAction,
 	SelectDropdownOptionAction,
 	SendKeysAction,
 	StructuredOutputAction,
 	SwitchTabAction,
 	UploadFileAction,
 )
-from browser_use.utils import _log_pretty_url, time_execution_sync
+from browser_use.utils import time_execution_sync
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,25 @@ UploadFileEvent.model_rebuild()
 Context = TypeVar('Context')
 
 T = TypeVar('T', bound=BaseModel)
+
+
+def _detect_sensitive_key_name(text: str, sensitive_data: dict[str, str | dict[str, str]] | None) -> str | None:
+	"""Detect which sensitive key name corresponds to the given text value."""
+	if not sensitive_data or not text:
+		return None
+
+	# Collect all sensitive values and their keys
+	for domain_or_key, content in sensitive_data.items():
+		if isinstance(content, dict):
+			# New format: {domain: {key: value}}
+			for key, value in content.items():
+				if value and value == text:
+					return key
+		elif content:  # Old format: {key: value}
+			if content == text:
+				return domain_or_key
+
+	return None
 
 
 def handle_browser_error(e: BrowserError) -> ActionResult:
@@ -96,66 +115,29 @@ class Tools(Generic[Context]):
 
 		# Basic Navigation Actions
 		@self.registry.action(
-			'Search the query in Google, the query should be a search query like humans search in Google, concrete and not vague or super long.',
-			param_model=SearchGoogleAction,
+			'',
+			param_model=SearchAction,
 		)
-		async def search_google(params: SearchGoogleAction, browser_session: BrowserSession):
-			search_url = f'https://www.google.com/search?q={params.query}&udm=14'
+		async def search(params: SearchAction, browser_session: BrowserSession):
+			import urllib.parse
 
-			# Check if there's already a tab open on Google or agent's about:blank
-			use_new_tab = True
-			try:
-				tabs = await browser_session.get_tabs()
-				# Get last 4 chars of browser session ID to identify agent's tabs
-				browser_session_label = str(browser_session.id)[-4:]
-				logger.debug(f'Checking {len(tabs)} tabs for reusable tab (browser_session_label: {browser_session_label})')
+			# Encode query for URL safety
+			encoded_query = urllib.parse.quote_plus(params.query)
 
-				for i, tab in enumerate(tabs):
-					logger.debug(f'Tab {i}: url="{tab.url}", title="{tab.title}"')
-					# Check if tab is on Google domain
-					if tab.url and tab.url.strip('/').lower() in ('https://www.google.com', 'https://google.com'):
-						# Found existing Google tab, navigate in it
-						logger.debug(f'Found existing Google tab at index {i}: {tab.url}, reusing it')
+			# Build search URL based on search engine
+			search_engines = {
+				'duckduckgo': f'https://duckduckgo.com/?q={encoded_query}',
+				'google': f'https://www.google.com/search?q={encoded_query}&udm=14',
+				'bing': f'https://www.bing.com/search?q={encoded_query}',
+			}
 
-						# Switch to this tab first if it's not the current one
-						from browser_use.browser.events import SwitchTabEvent
+			if params.engine.lower() not in search_engines:
+				return ActionResult(error=f'Unsupported search engine: {params.engine}. Options: duckduckgo, google, bing')
 
-						if browser_session.agent_focus and tab.target_id != browser_session.agent_focus.target_id:
-							try:
-								switch_event = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=tab.target_id))
-								await switch_event
-								await switch_event.event_result(raise_if_none=False)
-							except Exception as e:
-								logger.warning(f'Failed to switch to existing Google tab: {e}, will use new tab')
-								continue
+			search_url = search_engines[params.engine.lower()]
 
-						use_new_tab = False
-						break
-					# Check if it's an agent-owned about:blank page (has "Starting agent XXXX..." title)
-					# IMPORTANT: about:blank is also used briefly for new tabs the agent is trying to open, dont take over those!
-					elif tab.url == 'about:blank' and tab.title:
-						# Check if this is our agent's about:blank page with DVD animation
-						# The title should be "Starting agent XXXX..." where XXXX is the browser_session_label
-						if browser_session_label in tab.title:
-							# This is our agent's about:blank page
-							logger.debug(f'Found agent-owned about:blank tab at index {i} with title: "{tab.title}", reusing it')
-
-							# Switch to this tab first
-							from browser_use.browser.events import SwitchTabEvent
-
-							if browser_session.agent_focus and tab.target_id != browser_session.agent_focus.target_id:
-								try:
-									switch_event = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=tab.target_id))
-									await switch_event
-									await switch_event.event_result()
-								except Exception as e:
-									logger.warning(f'Failed to switch to agent-owned tab: {e}, will use new tab')
-									continue
-
-							use_new_tab = False
-							break
-			except Exception as e:
-				logger.debug(f'Could not check for existing tabs: {e}, using new tab')
+			# Simple tab logic: use current tab by default
+			use_new_tab = False
 
 			# Dispatch navigation event
 			try:
@@ -167,18 +149,19 @@ class Tools(Generic[Context]):
 				)
 				await event
 				await event.event_result(raise_if_any=True, raise_if_none=False)
-				memory = f"Searched Google for '{params.query}'"
+				memory = f"Searched {params.engine.title()} for '{params.query}'"
 				msg = f'🔍  {memory}'
 				logger.info(msg)
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
 			except Exception as e:
-				logger.error(f'Failed to search Google: {e}')
-				return ActionResult(error=f'Failed to search Google for "{params.query}": {str(e)}')
+				logger.error(f'Failed to search {params.engine}: {e}')
+				return ActionResult(error=f'Failed to search {params.engine} for "{params.query}": {str(e)}')
 
 		@self.registry.action(
-			'Navigate to URL, set new_tab=True to open in new tab, False to navigate in current tab', param_model=GoToUrlAction
+			'',
+			param_model=NavigateAction,
 		)
-		async def go_to_url(params: GoToUrlAction, browser_session: BrowserSession):
+		async def navigate(params: NavigateAction, browser_session: BrowserSession):
 			try:
 				# Dispatch navigation event
 				event = browser_session.event_bus.dispatch(NavigateToUrlEvent(url=params.url, new_tab=params.new_tab))
@@ -221,7 +204,7 @@ class Tools(Generic[Context]):
 					# Return error in ActionResult instead of re-raising
 					return ActionResult(error=f'Navigation failed: {str(e)}')
 
-		@self.registry.action('Go back', param_model=NoParamsAction)
+		@self.registry.action('', param_model=NoParamsAction)
 		async def go_back(_: NoParamsAction, browser_session: BrowserSession):
 			try:
 				event = browser_session.event_bus.dispatch(GoBackEvent())
@@ -235,9 +218,7 @@ class Tools(Generic[Context]):
 				error_msg = f'Failed to go back: {str(e)}'
 				return ActionResult(error=error_msg)
 
-		@self.registry.action(
-			'Wait for x seconds (default 3) (max 30 seconds). This can be used to wait until the page is fully loaded.'
-		)
+		@self.registry.action('')
 		async def wait(seconds: int = 3):
 			# Cap wait time at maximum 30 seconds
 			# Reduce the wait time by 3 seconds to account for the llm call which takes at least 3 seconds
@@ -253,10 +234,10 @@ class Tools(Generic[Context]):
 		# Element Interaction Actions
 
 		@self.registry.action(
-			'Click element by index. Only indices from your browser_state are allowed. Never use an index that is not inside your current browser_state. Set while_holding_ctrl=True to open any resulting navigation in a new tab.',
+			'',
 			param_model=ClickElementAction,
 		)
-		async def click_element_by_index(params: ClickElementAction, browser_session: BrowserSession):
+		async def click(params: ClickElementAction, browser_session: BrowserSession):
 			# Dispatch click event with node
 			try:
 				assert params.index != 0, (
@@ -268,15 +249,13 @@ class Tools(Generic[Context]):
 				if node is None:
 					raise ValueError(f'Element index {params.index} not found in browser state')
 
-				event = browser_session.event_bus.dispatch(
-					ClickElementEvent(node=node, while_holding_ctrl=params.while_holding_ctrl or False)
-				)
+				event = browser_session.event_bus.dispatch(ClickElementEvent(node=node, while_holding_ctrl=params.ctrl or False))
 				await event
 				# Wait for handler to complete and get any exception or metadata
 				click_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
-				memory = f'Clicked element with index {params.index}'
+				memory = 'Clicked element'
 
-				if params.while_holding_ctrl:
+				if params.ctrl:
 					memory += ' and opened in new tab'
 
 				# Check if a new tab was opened (from watchdog metadata)
@@ -288,19 +267,20 @@ class Tools(Generic[Context]):
 
 				# Include click coordinates in metadata if available
 				return ActionResult(
-					long_term_memory=memory,
+					extracted_content=memory,
 					metadata=click_metadata if isinstance(click_metadata, dict) else None,
 				)
 			except BrowserError as e:
 				if 'Cannot click on <select> elements.' in str(e):
 					try:
-						return await get_dropdown_options(
+						return await dropdown_options(
 							params=GetDropdownOptionsAction(index=params.index), browser_session=browser_session
 						)
 					except Exception as dropdown_error:
 						logger.error(
 							f'Failed to get dropdown options as shortcut during click_element_by_index on dropdown: {type(dropdown_error).__name__}: {dropdown_error}'
 						)
+					return ActionResult(error='Can not click on select elements.')
 
 				return handle_browser_error(e)
 			except Exception as e:
@@ -308,10 +288,15 @@ class Tools(Generic[Context]):
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(
-			'Input text into an input interactive element. Only input text into indices that are inside your current browser_state. Never input text into indices that are not inside your current browser_state.',
+			'',
 			param_model=InputTextAction,
 		)
-		async def input_text(params: InputTextAction, browser_session: BrowserSession, has_sensitive_data: bool = False):
+		async def input(
+			params: InputTextAction,
+			browser_session: BrowserSession,
+			has_sensitive_data: bool = False,
+			sensitive_data: dict[str, str | dict[str, str]] | None = None,
+		):
 			# Look up the node from the selector map
 			node = await browser_session.get_element_by_index(params.index)
 			if node is None:
@@ -319,18 +304,41 @@ class Tools(Generic[Context]):
 
 			# Dispatch type text event with node
 			try:
+				# Detect which sensitive key is being used
+				sensitive_key_name = None
+				if has_sensitive_data and sensitive_data:
+					sensitive_key_name = _detect_sensitive_key_name(params.text, sensitive_data)
+
 				event = browser_session.event_bus.dispatch(
-					TypeTextEvent(node=node, text=params.text, clear_existing=params.clear_existing)
+					TypeTextEvent(
+						node=node,
+						text=params.text,
+						clear=params.clear,
+						is_sensitive=has_sensitive_data,
+						sensitive_key_name=sensitive_key_name,
+					)
 				)
 				await event
 				input_metadata = await event.event_result(raise_if_any=True, raise_if_none=False)
-				msg = f"Input '{params.text}' into element {params.index}."
-				logger.debug(msg)
+
+				# Create message with sensitive data handling
+				if has_sensitive_data:
+					if sensitive_key_name:
+						msg = f'Input {sensitive_key_name} into element {params.index}.'
+						log_msg = f'Input <{sensitive_key_name}> into element {params.index}.'
+					else:
+						msg = f'Input sensitive data into element {params.index}.'
+						log_msg = f'Input <sensitive> into element {params.index}.'
+				else:
+					msg = f"Input '{params.text}' into element {params.index}."
+					log_msg = msg
+
+				logger.debug(log_msg)
 
 				# Include input coordinates in metadata if available
 				return ActionResult(
 					extracted_content=msg,
-					long_term_memory=f"Input '{params.text}' into element {params.index}.",
+					long_term_memory=msg,
 					metadata=input_metadata if isinstance(input_metadata, dict) else None,
 				)
 			except BrowserError as e:
@@ -341,8 +349,11 @@ class Tools(Generic[Context]):
 				error_msg = f'Failed to input text into element {params.index}: {e}'
 				return ActionResult(error=error_msg)
 
-		@self.registry.action('Upload file to interactive element with file path', param_model=UploadFileAction)
-		async def upload_file_to_element(
+		@self.registry.action(
+			'',
+			param_model=UploadFileAction,
+		)
+		async def upload_file(
 			params: UploadFileAction, browser_session: BrowserSession, available_file_paths: list[str], file_system: FileSystem
 		):
 			# Check if file is in available_file_paths (user-provided or downloaded files)
@@ -490,45 +501,53 @@ class Tools(Generic[Context]):
 
 		# Tab Management Actions
 
-		@self.registry.action('Switch tab', param_model=SwitchTabAction)
-		async def switch_tab(params: SwitchTabAction, browser_session: BrowserSession):
-			# Dispatch switch tab event
+		@self.registry.action('', param_model=SwitchTabAction)
+		async def switch(params: SwitchTabAction, browser_session: BrowserSession):
+			# Simple switch tab logic
 			try:
 				target_id = await browser_session.get_target_id_from_tab_id(params.tab_id)
 
 				event = browser_session.event_bus.dispatch(SwitchTabEvent(target_id=target_id))
 				await event
-				new_target_id = await event.event_result(raise_if_any=True, raise_if_none=False)
-				assert new_target_id, 'SwitchTabEvent did not return a TargetID for the new tab that was switched to'
-				memory = f'Switched to Tab with ID {new_target_id[-4:]}'
+				new_target_id = await event.event_result(raise_if_any=False, raise_if_none=False)  # Don't raise on errors
+
+				if new_target_id:
+					memory = f'Switched to tab #{new_target_id[-4:]}'
+				else:
+					memory = f'Switched to tab #{params.tab_id}'
+
 				logger.info(f'🔄  {memory}')
 				return ActionResult(extracted_content=memory, long_term_memory=memory)
 			except Exception as e:
-				logger.error(f'Failed to switch tab: {type(e).__name__}: {e}')
-				return ActionResult(error=f'Failed to switch to tab {params.tab_id}.')
+				logger.warning(f'Tab switch may have failed: {e}')
+				memory = f'Attempted to switch to tab #{params.tab_id}'
+				return ActionResult(extracted_content=memory, long_term_memory=memory)
 
-		@self.registry.action('Close an existing tab', param_model=CloseTabAction)
-		async def close_tab(params: CloseTabAction, browser_session: BrowserSession):
-			# Dispatch close tab event
+		@self.registry.action('', param_model=CloseTabAction)
+		async def close(params: CloseTabAction, browser_session: BrowserSession):
+			# Simple close tab logic
 			try:
 				target_id = await browser_session.get_target_id_from_tab_id(params.tab_id)
-				cdp_session = await browser_session.get_or_create_cdp_session()
-				target_info = await cdp_session.cdp_client.send.Target.getTargetInfo(
-					params={'targetId': target_id}, session_id=cdp_session.session_id
-				)
-				tab_url = target_info['targetInfo']['url']
+
+				# Dispatch close tab event - handle stale target IDs gracefully
 				event = browser_session.event_bus.dispatch(CloseTabEvent(target_id=target_id))
 				await event
-				await event.event_result(raise_if_any=True, raise_if_none=False)
-				memory = f'Closed tab # {params.tab_id} ({_log_pretty_url(tab_url)})'
+				await event.event_result(raise_if_any=False, raise_if_none=False)  # Don't raise on errors
+
+				memory = f'Closed tab #{params.tab_id}'
 				logger.info(f'🗑️  {memory}')
 				return ActionResult(
 					extracted_content=memory,
 					long_term_memory=memory,
 				)
 			except Exception as e:
-				logger.error(f'Failed to close tab: {e}')
-				return ActionResult(error=f'Failed to close tab {params.tab_id}.')
+				# Handle stale target IDs gracefully
+				logger.warning(f'Tab {params.tab_id} may already be closed: {e}')
+				memory = f'Tab #{params.tab_id} closed (was already closed or invalid)'
+				return ActionResult(
+					extracted_content=memory,
+					long_term_memory=memory,
+				)
 
 		# Content Actions
 
@@ -536,27 +555,14 @@ class Tools(Generic[Context]):
 		# This action is temporarily disabled as it needs refactoring to use events
 
 		@self.registry.action(
-			"""This tool sends the markdown of the current page with the query to an LLM to extract structured, semantic data (e.g. product description, price, all information about XYZ) from the markdown of the current webpage based on a query.
-Only use when:
-- You are sure that you are on the right page for the query
-- You know exactly the information you need to extract from the page
-- You did not previously call this tool on the same page
-You can not use this tool to:
-- Get interactive elements like buttons, links, dropdowns, menus, etc.
-- If you previously asked extract_structured_data on the same page with the same query, you should not call it again.
-
-Set extract_links=True only if your query requires extracting links/URLs from the page.
-Use start_from_char to start extraction from a specific character position (use if extraction was previously truncated and you want more content).
-
-If this tool does not return the desired outcome, do not call it again, use scroll_to_text or scroll to find the desired information.
-""",
+			"""LLM extracts structured data from page markdown. Use when: on right page, know what to extract, haven't called before on same page+query. Can't get interactive elements. Set extract_links=True for URLs. Use start_from_char if truncated. If fails, use find_text/scroll instead.""",
 		)
-		async def extract_structured_data(
+		async def extract(
 			query: str,
-			extract_links: bool,
 			browser_session: BrowserSession,
 			page_extraction_llm: BaseChatModel,
 			file_system: FileSystem,
+			extract_links: bool = False,
 			start_from_char: int = 0,
 		):
 			# Constants
@@ -669,12 +675,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				raise RuntimeError(str(e))
 
 		@self.registry.action(
-			"""Scroll the page by specified number of pages (set down=True to scroll down, down=False to scroll up, num_pages=number of pages to scroll like 0.5 for half page, 10.0 for ten pages, etc.). 
-			Default behavior is to scroll the entire page. This is enough for most cases.
-			Optional if there are multiple scroll containers, use frame_element_index parameter with an element inside the container you want to scroll in. For that you must use indices that exist in your browser_state (works well for dropdowns and custom UI components). 
-			Instead of scrolling step after step, use a high number of pages at once like 10 to get to the bottom of the page.
-			If you know where you want to scroll to, use scroll_to_text instead of this tool.
-			""",
+			"""Scroll by pages (down=True/False, pages=0.5-10.0, default 1.0). Use index for scroll containers (dropdowns/custom UI). High pages (10) reaches bottom. Multi-page scrolls sequentially. Viewport-based height, fallback 1000px/page.""",
 			param_model=ScrollAction,
 		)
 		async def scroll(params: ScrollAction, browser_session: BrowserSession):
@@ -682,34 +683,93 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				# Look up the node from the selector map if index is provided
 				# Special case: index 0 means scroll the whole page (root/body element)
 				node = None
-				if params.frame_element_index is not None and params.frame_element_index != 0:
-					node = await browser_session.get_element_by_index(params.frame_element_index)
+				if params.index is not None and params.index != 0:
+					node = await browser_session.get_element_by_index(params.index)
 					if node is None:
 						# Element does not exist
-						msg = f'Element index {params.frame_element_index} not found in browser state'
+						msg = f'Element index {params.index} not found in browser state'
 						return ActionResult(error=msg)
 
-				# Dispatch scroll event with node - the complex logic is handled in the event handler
-				# Convert pages to pixels (assuming 1000px per page as standard viewport height)
-				pixels = int(params.num_pages * 1000)
-				event = browser_session.event_bus.dispatch(
-					ScrollEvent(direction='down' if params.down else 'up', amount=pixels, node=node)
-				)
-				await event
-				await event.event_result(raise_if_any=True, raise_if_none=False)
 				direction = 'down' if params.down else 'up'
+				target = 'the page' if params.index is None or params.index == 0 else f'element {params.index}'
 
-				# If index is 0 or None, we're scrolling the page
-				target = (
-					'the page'
-					if params.frame_element_index is None or params.frame_element_index == 0
-					else f'element {params.frame_element_index}'
-				)
+				# Get actual viewport height for more accurate scrolling
+				try:
+					cdp_session = await browser_session.get_or_create_cdp_session()
+					metrics = await cdp_session.cdp_client.send.Page.getLayoutMetrics(session_id=cdp_session.session_id)
 
-				if params.num_pages == 1.0:
-					long_term_memory = f'Scrolled {direction} {target} by one page'
+					# Use cssVisualViewport for the most accurate representation
+					css_viewport = metrics.get('cssVisualViewport', {})
+					css_layout_viewport = metrics.get('cssLayoutViewport', {})
+
+					# Get viewport height, prioritizing cssVisualViewport
+					viewport_height = int(css_viewport.get('clientHeight') or css_layout_viewport.get('clientHeight', 1000))
+
+					logger.debug(f'Detected viewport height: {viewport_height}px')
+				except Exception as e:
+					viewport_height = 1000  # Fallback to 1000px
+					logger.debug(f'Failed to get viewport height, using fallback 1000px: {e}')
+
+				# For multiple pages (>=1.0), scroll one page at a time to ensure each scroll completes
+				if params.pages >= 1.0:
+					import asyncio
+
+					num_full_pages = int(params.pages)
+					remaining_fraction = params.pages - num_full_pages
+
+					completed_scrolls = 0
+
+					# Scroll one page at a time
+					for i in range(num_full_pages):
+						try:
+							pixels = viewport_height  # Use actual viewport height
+							if not params.down:
+								pixels = -pixels
+
+							event = browser_session.event_bus.dispatch(
+								ScrollEvent(direction=direction, amount=abs(pixels), node=node)
+							)
+							await event
+							await event.event_result(raise_if_any=True, raise_if_none=False)
+							completed_scrolls += 1
+
+							# Small delay to ensure scroll completes before next one
+							await asyncio.sleep(0.3)
+
+						except Exception as e:
+							logger.warning(f'Scroll {i + 1}/{num_full_pages} failed: {e}')
+							# Continue with remaining scrolls even if one fails
+
+					# Handle fractional page if present
+					if remaining_fraction > 0:
+						try:
+							pixels = int(remaining_fraction * viewport_height)
+							if not params.down:
+								pixels = -pixels
+
+							event = browser_session.event_bus.dispatch(
+								ScrollEvent(direction=direction, amount=abs(pixels), node=node)
+							)
+							await event
+							await event.event_result(raise_if_any=True, raise_if_none=False)
+							completed_scrolls += remaining_fraction
+
+						except Exception as e:
+							logger.warning(f'Fractional scroll failed: {e}')
+
+					if params.pages == 1.0:
+						long_term_memory = f'Scrolled {direction} {target} by one page ({viewport_height}px)'
+					else:
+						long_term_memory = f'Scrolled {direction} {target} by {completed_scrolls:.1f} pages (requested: {params.pages}, {viewport_height}px per page)'
 				else:
-					long_term_memory = f'Scrolled {direction} {target} by {params.num_pages} pages'
+					# For fractional pages <1.0, do single scroll
+					pixels = int(params.pages * viewport_height)
+					event = browser_session.event_bus.dispatch(
+						ScrollEvent(direction='down' if params.down else 'up', amount=pixels, node=node)
+					)
+					await event
+					await event.event_result(raise_if_any=True, raise_if_none=False)
+					long_term_memory = f'Scrolled {direction} {target} by {params.pages} pages ({viewport_height}px per page)'
 
 				msg = f'🔍 {long_term_memory}'
 				logger.info(msg)
@@ -720,7 +780,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				return ActionResult(error=error_msg)
 
 		@self.registry.action(
-			'Send strings of special keys to use e.g. Escape, Backspace, Insert, PageDown, Delete, Enter, or Shortcuts such as `Control+o`, `Control+Shift+T`',
+			'',
 			param_model=SendKeysAction,
 		)
 		async def send_keys(params: SendKeysAction, browser_session: BrowserSession):
@@ -738,10 +798,8 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				error_msg = f'Failed to send keys: {str(e)}'
 				return ActionResult(error=error_msg)
 
-		@self.registry.action(
-			description='Scroll to a text in the current page. This helps you to be efficient. Prefer this tool over scrolling step by step.',
-		)
-		async def scroll_to_text(text: str, browser_session: BrowserSession):  # type: ignore
+		@self.registry.action('')
+		async def find_text(text: str, browser_session: BrowserSession):  # type: ignore
 			# Dispatch scroll to text event
 			event = browser_session.event_bus.dispatch(ScrollToTextEvent(text=text))
 
@@ -761,13 +819,26 @@ You will be given a query and the markdown of a webpage that has been filtered t
 					long_term_memory=f"Tried scrolling to text '{text}' but it was not found",
 				)
 
+		@self.registry.action('')
+		async def screenshot():
+			"""Request that a screenshot be included in the next observation"""
+			memory = 'Requested screenshot for next observation'
+			msg = f'📸 {memory}'
+			logger.info(msg)
+
+			# Return flag in metadata to signal that screenshot should be included
+			return ActionResult(
+				extracted_content=memory,
+				metadata={'include_screenshot': True},
+			)
+
 		# Dropdown Actions
 
 		@self.registry.action(
-			'Get list of values for a dropdown input field. Only works on dropdown-style form elements (<select>, Semantic UI/aria-labeled select, etc.). Do not use this tool for none dropdown elements.',
+			'',
 			param_model=GetDropdownOptionsAction,
 		)
-		async def get_dropdown_options(params: GetDropdownOptionsAction, browser_session: BrowserSession):
+		async def dropdown_options(params: GetDropdownOptionsAction, browser_session: BrowserSession):
 			"""Get all options from a native dropdown or ARIA menu"""
 			# Look up the node from the selector map
 			node = await browser_session.get_element_by_index(params.index)
@@ -790,10 +861,10 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			)
 
 		@self.registry.action(
-			'Select dropdown option by exact text from any dropdown type (native <select>, ARIA menus, or custom dropdowns). Searches target element and children to find selectable options.',
+			'',
 			param_model=SelectDropdownOptionAction,
 		)
-		async def select_dropdown_option(params: SelectDropdownOptionAction, browser_session: BrowserSession):
+		async def select_dropdown(params: SelectDropdownOptionAction, browser_session: BrowserSession):
 			"""Select dropdown option by the text of the option you want to select"""
 			# Look up the node from the selector map
 			node = await browser_session.get_element_by_index(params.index)
@@ -833,9 +904,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 					return ActionResult(error=error_msg)
 
 		# File System Actions
-		@self.registry.action(
-			'Write or append content to file_name in file system. Allowed extensions are .md, .txt, .json, .csv, .pdf. For .pdf files, write the content in markdown format and it will automatically be converted to a properly formatted PDF document.'
-		)
+		@self.registry.action('')
 		async def write_file(
 			file_name: str,
 			content: str,
@@ -855,15 +924,13 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			logger.info(f'💾 {result}')
 			return ActionResult(extracted_content=result, long_term_memory=result)
 
-		@self.registry.action(
-			'Replace old_str with new_str in file_name. old_str must exactly match the string to replace in original text. Recommended tool to mark completed items in todo.md or change specific contents in a file.'
-		)
-		async def replace_file_str(file_name: str, old_str: str, new_str: str, file_system: FileSystem):
+		@self.registry.action('')
+		async def replace_file(file_name: str, old_str: str, new_str: str, file_system: FileSystem):
 			result = await file_system.replace_file_str(file_name, old_str, new_str)
 			logger.info(f'💾 {result}')
 			return ActionResult(extracted_content=result, long_term_memory=result)
 
-		@self.registry.action('Read file_name from file system')
+		@self.registry.action('')
 		async def read_file(file_name: str, available_file_paths: list[str], file_system: FileSystem):
 			if available_file_paths and file_name in available_file_paths:
 				result = await file_system.read_file(file_name, external_file=True)
@@ -892,7 +959,73 @@ You will be given a query and the markdown of a webpage that has been filtered t
 				include_extracted_content_only_once=True,
 			)
 
+		@self.registry.action(
+			"""Execute JS. MUST: wrap in IIFE (function(){...})() or (async function(){...})(), add try-catch, validate elements exist. Check null before accessing properties. Use for: hover, drag, custom selectors, forms, extract/filter links, iframes, shadow DOM, React/Vue/Angular. Limit output. Examples: (function(){try{const el=document.querySelector('#id');return el?el.value:'not found'}catch(e){return 'Error: '+e.message}})() ✓ | document.querySelector('#id').value ✗. Shadow: iterate hosts, check shadowRoot. Return JSON.stringify() for objects. Do not use comments""",
+		)
+		async def evaluate(code: str, browser_session: BrowserSession):
+			# Execute JavaScript with proper error handling and promise support
+
+			cdp_session = await browser_session.get_or_create_cdp_session()
+
+			try:
+				# Always use awaitPromise=True - it's ignored for non-promises
+				result = await cdp_session.cdp_client.send.Runtime.evaluate(
+					params={'expression': code, 'returnByValue': True, 'awaitPromise': True},
+					session_id=cdp_session.session_id,
+				)
+
+				# Check for JavaScript execution errors
+				if result.get('exceptionDetails'):
+					exception = result['exceptionDetails']
+					error_msg = f'JavaScript execution error: {exception.get("text", "Unknown error")}'
+					if 'lineNumber' in exception:
+						error_msg += f' at line {exception["lineNumber"]}'
+					msg = f'Code: {code}\n\nError: {error_msg}'
+					logger.info(msg)
+					return ActionResult(error=msg)
+
+				# Get the result data
+				result_data = result.get('result', {})
+
+				# Check for wasThrown flag (backup error detection)
+				if result_data.get('wasThrown'):
+					msg = f'Code: {code}\n\nError: JavaScript execution failed (wasThrown=true)'
+					logger.info(msg)
+					return ActionResult(error=msg)
+
+				# Get the actual value
+				value = result_data.get('value')
+
+				# Handle different value types
+				if value is None:
+					# Could be legitimate null/undefined result
+					result_text = str(value) if 'value' in result_data else 'undefined'
+				elif isinstance(value, (dict, list)):
+					# Complex objects - should be serialized by returnByValue
+					try:
+						result_text = json.dumps(value, ensure_ascii=False)
+					except (TypeError, ValueError):
+						# Fallback for non-serializable objects
+						result_text = str(value)
+				else:
+					# Primitive values (string, number, boolean)
+					result_text = str(value)
+
+				# Apply length limit with better truncation
+				if len(result_text) > 20000:
+					result_text = result_text[:19950] + '\n... [Truncated after 20000 characters]'
+				msg = f'Code: {code}\n\nResult: {result_text}'
+				logger.info(msg)
+				return ActionResult(extracted_content=f'Code: {code}\n\nResult: {result_text}')
+
+			except Exception as e:
+				# CDP communication or other system errors
+				error_msg = f'Code: {code}\n\nError: {error_msg} Failed to execute JavaScript: {type(e).__name__}: {e}'
+				logger.info(error_msg)
+				return ActionResult(error=error_msg)
+
 	# Custom done action for structured output
+	@observe_debug(ignore_input=True, ignore_output=True, name='extract_clean_markdown')
 	async def extract_clean_markdown(
 		self, browser_session: BrowserSession, extract_links: bool = False
 	) -> tuple[str, dict[str, Any]]:
@@ -992,7 +1125,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 			self.display_files_in_done_text = display_files_in_done_text
 
 			@self.registry.action(
-				'Complete task - with return text and if the task is finished (success=True) or not yet completely finished (success=False), because last step is reached',
+				'Complete task with structured output.',
 				param_model=StructuredOutputAction[output_model],
 			)
 			async def done(params: StructuredOutputAction):
@@ -1014,7 +1147,7 @@ You will be given a query and the markdown of a webpage that has been filtered t
 		else:
 
 			@self.registry.action(
-				'Complete task - provide a summary of results for the user. Set success=True if task completed successfully, false otherwise. Text should be your response to the user summarizing results. Include files you would like to display to the user in files_to_display.',
+				'Complete task.',
 				param_model=DoneAction,
 			)
 			async def done(params: DoneAction, file_system: FileSystem):

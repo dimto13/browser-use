@@ -18,6 +18,7 @@ from browser_use.browser.events import (
 	BrowserStopEvent,
 )
 from browser_use.browser.watchdog_base import BaseWatchdog
+from browser_use.observability import observe_debug
 
 if TYPE_CHECKING:
 	pass
@@ -42,6 +43,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 	_temp_dirs_to_cleanup: list[Path] = PrivateAttr(default_factory=list)
 	_original_user_data_dir: str | None = PrivateAttr(default=None)
 
+	@observe_debug(ignore_input=True, ignore_output=True, name='browser_launch_event')
 	async def on_BrowserLaunchEvent(self, event: BrowserLaunchEvent) -> BrowserLaunchResult:
 		"""Launch a local browser process."""
 
@@ -85,6 +87,7 @@ class LocalBrowserWatchdog(BaseWatchdog):
 			# Dispatch BrowserKillEvent without awaiting so it gets processed after all BrowserStopEvent handlers
 			self.event_bus.dispatch(BrowserKillEvent())
 
+	@observe_debug(ignore_input=True, ignore_output=True, name='launch_browser_process')
 	async def _launch_browser(self, max_retries: int = 3) -> tuple[psutil.Process, str]:
 		"""Launch browser process and return (process, cdp_url).
 
@@ -135,6 +138,9 @@ class LocalBrowserWatchdog(BaseWatchdog):
 
 				# Launch browser subprocess directly
 				self.logger.debug(f'[LocalBrowserWatchdog] 🚀 Launching browser subprocess with {len(launch_args)} args...')
+				self.logger.debug(
+					f'[LocalBrowserWatchdog] 📂 user_data_dir={profile.user_data_dir}, profile_directory={profile.profile_directory}'
+				)
 				subprocess = await asyncio.create_subprocess_exec(
 					browser_path,
 					*launch_args,
