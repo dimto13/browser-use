@@ -1,5 +1,4 @@
 import asyncio
-import enum
 import json
 import logging
 import os
@@ -268,9 +267,8 @@ class Tools(Generic[Context]):
 				asyncio.create_task(browser_session.highlight_coordinate_click(actual_x, actual_y))
 
 				# Dispatch ClickCoordinateEvent - handler will check for safety and click
-				# Pass force parameter from params (defaults to False for safety)
 				event = browser_session.event_bus.dispatch(
-					ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=params.force)
+					ClickCoordinateEvent(coordinate_x=actual_x, coordinate_y=actual_y, force=True)
 				)
 				await event
 				# Wait for handler to complete and get any exception or metadata
@@ -369,7 +367,7 @@ class Tools(Generic[Context]):
 				return await _click_by_coordinate(params, browser_session)
 
 		@self.registry.action(
-			'Input text into element with index.',
+			'Input text into element with index. Only works with index, NEVER use coordinates for inputting text.',
 			param_model=InputTextAction,
 		)
 		async def input(
@@ -1282,12 +1280,8 @@ Validated Code (after quote fixing):
 			)
 			async def done(params: StructuredOutputAction):
 				# Exclude success from the output JSON since it's an internal parameter
-				output_dict = params.data.model_dump()
-
-				# Enums are not serializable, convert to string
-				for key, value in output_dict.items():
-					if isinstance(value, enum.Enum):
-						output_dict[key] = value.value
+				# Use mode='json' to properly serialize enums at all nesting levels
+				output_dict = params.data.model_dump(mode='json')
 
 				return ActionResult(
 					is_done=True,

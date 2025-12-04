@@ -22,6 +22,7 @@ from browser_use.agent.cloud_events import (
 )
 from browser_use.agent.message_manager.utils import save_conversation
 from browser_use.llm.base import BaseChatModel
+from browser_use.llm.exceptions import ModelProviderError, ModelRateLimitError
 from browser_use.llm.messages import BaseMessage, ContentPartImageParam, ContentPartTextParam, UserMessage
 from browser_use.tokens.service import TokenCost
 
@@ -166,6 +167,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		demo_mode: bool | None = None,
 		max_history_items: int | None = None,
 		page_extraction_llm: BaseChatModel | None = None,
+		fallback_llm: BaseChatModel | None = None,
 		use_judge: bool = True,
 		ground_truth: str | None = None,
 		judge_llm: BaseChatModel | None = None,
@@ -283,6 +285,11 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.task = self._enhance_task_with_schema(task, output_model_schema)
 		self.llm = llm
 		self.judge_llm = judge_llm
+
+		# Fallback LLM configuration
+		self._fallback_llm: BaseChatModel | None = fallback_llm
+		self._using_fallback_llm: bool = False
+		self._original_llm: BaseChatModel = llm  # Store original for reference
 		self.directly_open_url = directly_open_url
 		self.include_recent_events = include_recent_events
 		self._url_shortening_limit = _url_shortening_limit
@@ -524,19 +531,30 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 	@property
 	def logger(self) -> logging.Logger:
 		"""Get instance-specific logger with task ID in the name"""
-
-		_browser_session_id = self.browser_session.id if self.browser_session else '----'
+		# logger may be called in __init__ so we don't assume self.* attributes have been initialized
+		_task_id = task_id[-4:] if (task_id := getattr(self, 'task_id', None)) else '----'
+		_browser_session_id = browser_session.id[-4:] if (browser_session := getattr(self, 'browser_session', None)) else '----'
 		_current_target_id = (
-			self.browser_session.agent_focus_target_id[-2:]
-			if self.browser_session and self.browser_session.agent_focus_target_id
+			browser_session.agent_focus_target_id[-2:]
+			if (browser_session := getattr(self, 'browser_session', None)) and browser_session.agent_focus_target_id
 			else '--'
 		)
-		return logging.getLogger(f'browser_use.Agent🅰 {self.task_id[-4:]} ⇢ 🅑 {_browser_session_id[-4:]} 🅣 {_current_target_id}')
+		return logging.getLogger(f'browser_use.Agent🅰 {_task_id} ⇢ 🅑 {_browser_session_id} 🅣 {_current_target_id}')
 
 	@property
 	def browser_profile(self) -> BrowserProfile:
 		assert self.browser_session is not None, 'BrowserSession is not set up'
 		return self.browser_session.browser_profile
+
+	@property
+	def is_using_fallback_llm(self) -> bool:
+		"""Check if the agent is currently using the fallback LLM."""
+		return self._using_fallback_llm
+
+	@property
+	def current_llm_model(self) -> str:
+		"""Get the model name of the currently active LLM."""
+		return self.llm.model if hasattr(self.llm, 'model') else 'unknown'
 
 	async def _check_and_update_downloads(self, context: str = '') -> None:
 		"""Check for new downloads and update available file paths."""
@@ -1356,6 +1374,68 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		except ValidationError:
 			# Just re-raise - Pydantic's validation errors are already descriptive
 			raise
+		except (ModelRateLimitError, ModelProviderError) as e:
+			# Check if we can switch to a fallback LLM
+			if not self._try_switch_to_fallback_llm(e):
+				# No fallback available, re-raise the original error
+				raise
+			# Retry with the fallback LLM
+			return await self.get_model_output(input_messages)
+
+	def _try_switch_to_fallback_llm(self, error: ModelRateLimitError | ModelProviderError) -> bool:
+		"""
+		Attempt to switch to a fallback LLM after a rate limit or provider error.
+
+		Returns True if successfully switched to a fallback, False if no fallback available.
+		Once switched, the agent will use the fallback LLM for the rest of the run.
+		"""
+		# Already using fallback - can't switch again
+		if self._using_fallback_llm:
+			self.logger.warning(
+				f'⚠️ Fallback LLM also failed ({type(error).__name__}: {error.message}), no more fallbacks available'
+			)
+			return False
+
+		# Check if error is retryable (rate limit, auth errors, or server errors)
+		# 401: API key invalid/expired - fallback to different provider
+		# 402: Insufficient credits/payment required - fallback to different provider
+		# 429: Rate limit exceeded
+		# 500, 502, 503, 504: Server errors
+		retryable_status_codes = {401, 402, 429, 500, 502, 503, 504}
+		is_retryable = isinstance(error, ModelRateLimitError) or (
+			hasattr(error, 'status_code') and error.status_code in retryable_status_codes
+		)
+
+		if not is_retryable:
+			return False
+
+		# Check if we have a fallback LLM configured
+		if self._fallback_llm is None:
+			self.logger.warning(f'⚠️ LLM error ({type(error).__name__}: {error.message}) but no fallback_llm configured')
+			return False
+
+		self._log_fallback_switch(error, self._fallback_llm)
+
+		# Switch to the fallback LLM
+		self.llm = self._fallback_llm
+		self._using_fallback_llm = True
+
+		# Register the fallback LLM for token cost tracking
+		self.token_cost_service.register_llm(self._fallback_llm)
+
+		return True
+
+	def _log_fallback_switch(self, error: ModelRateLimitError | ModelProviderError, fallback: BaseChatModel) -> None:
+		"""Log when switching to a fallback LLM."""
+		original_model = self._original_llm.model if hasattr(self._original_llm, 'model') else 'unknown'
+		fallback_model = fallback.model if hasattr(fallback, 'model') else 'unknown'
+		error_type = type(error).__name__
+		status_code = getattr(error, 'status_code', 'N/A')
+
+		self.logger.warning(
+			f'⚠️ Primary LLM ({original_model}) failed with {error_type} (status={status_code}), '
+			f'switching to fallback LLM ({fallback_model})'
+		)
 
 	async def _log_agent_run(self) -> None:
 		"""Log the agent run"""
@@ -1365,11 +1445,12 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.logger.debug(f'🤖 Browser-Use Library Version {self.version} ({self.source})')
 
 		# Check for latest version and log upgrade message if needed
-		latest_version = await check_latest_browser_use_version()
-		if latest_version and latest_version != self.version:
-			self.logger.info(
-				f'📦 Newer version available: {latest_version} (current: {self.version}). Upgrade with: uv add browser-use=={latest_version}'
-			)
+		if CONFIG.BROWSER_USE_VERSION_CHECK:
+			latest_version = await check_latest_browser_use_version()
+			if latest_version and latest_version != self.version:
+				self.logger.info(
+					f'📦 Newer version available: {latest_version} (current: {self.version}). Upgrade with: uv add browser-use=={latest_version}'
+				)
 
 	def _log_first_step_startup(self) -> None:
 		"""Log startup message only on the first step"""
@@ -2260,6 +2341,111 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 				long_term_memory=f'Rerun completed: {success_count} steps succeeded, {error_count} errors',
 			)
 
+	async def _execute_ai_step(
+		self,
+		query: str,
+		include_screenshot: bool = False,
+		extract_links: bool = False,
+		ai_step_llm: BaseChatModel | None = None,
+	) -> ActionResult:
+		"""
+		Execute an AI step during rerun to re-evaluate extract actions.
+		Analyzes full page DOM/markdown + optional screenshot.
+
+		Args:
+			query: What to analyze or extract from the current page
+			include_screenshot: Whether to include screenshot in analysis
+			extract_links: Whether to include links in markdown extraction
+			ai_step_llm: Optional LLM to use. If not provided, uses agent's LLM
+
+		Returns:
+			ActionResult with extracted content
+		"""
+		from browser_use.agent.prompts import get_ai_step_system_prompt, get_ai_step_user_prompt, get_rerun_summary_message
+		from browser_use.llm.messages import SystemMessage, UserMessage
+		from browser_use.utils import sanitize_surrogates
+
+		# Use provided LLM or agent's LLM
+		llm = ai_step_llm or self.llm
+		self.logger.debug(f'Using LLM for AI step: {llm.model}')
+
+		# Extract clean markdown
+		try:
+			from browser_use.dom.markdown_extractor import extract_clean_markdown
+
+			content, content_stats = await extract_clean_markdown(
+				browser_session=self.browser_session, extract_links=extract_links
+			)
+		except Exception as e:
+			return ActionResult(error=f'Could not extract clean markdown: {type(e).__name__}: {e}')
+
+		# Get screenshot if requested
+		screenshot_b64 = None
+		if include_screenshot:
+			try:
+				screenshot = await self.browser_session.take_screenshot(full_page=False)
+				if screenshot:
+					import base64
+
+					screenshot_b64 = base64.b64encode(screenshot).decode('utf-8')
+			except Exception as e:
+				self.logger.warning(f'Failed to capture screenshot for ai_step: {e}')
+
+		# Build prompt with content stats
+		original_html_length = content_stats['original_html_chars']
+		initial_markdown_length = content_stats['initial_markdown_chars']
+		final_filtered_length = content_stats['final_filtered_chars']
+		chars_filtered = content_stats['filtered_chars_removed']
+
+		stats_summary = f"""Content processed: {original_html_length:,} HTML chars → {initial_markdown_length:,} initial markdown → {final_filtered_length:,} filtered markdown"""
+		if chars_filtered > 0:
+			stats_summary += f' (filtered {chars_filtered:,} chars of noise)'
+
+		# Sanitize content
+		content = sanitize_surrogates(content)
+		query = sanitize_surrogates(query)
+
+		# Get prompts from prompts.py
+		system_prompt = get_ai_step_system_prompt()
+		prompt_text = get_ai_step_user_prompt(query, stats_summary, content)
+
+		# Build user message with optional screenshot
+		if screenshot_b64:
+			user_message = get_rerun_summary_message(prompt_text, screenshot_b64)
+		else:
+			user_message = UserMessage(content=prompt_text)
+
+		try:
+			import asyncio
+
+			response = await asyncio.wait_for(llm.ainvoke([SystemMessage(content=system_prompt), user_message]), timeout=120.0)
+
+			current_url = await self.browser_session.get_current_page_url()
+			extracted_content = (
+				f'<url>\n{current_url}\n</url>\n<query>\n{query}\n</query>\n<result>\n{response.completion}\n</result>'
+			)
+
+			# Simple memory handling
+			MAX_MEMORY_LENGTH = 1000
+			if len(extracted_content) < MAX_MEMORY_LENGTH:
+				memory = extracted_content
+				include_extracted_content_only_once = False
+			else:
+				file_name = await self.file_system.save_extracted_content(extracted_content)
+				memory = f'Query: {query}\nContent in {file_name} and once in <read_state>.'
+				include_extracted_content_only_once = True
+
+			self.logger.info(f'🤖 AI Step: {memory}')
+			return ActionResult(
+				extracted_content=extracted_content,
+				include_extracted_content_only_once=include_extracted_content_only_once,
+				long_term_memory=memory,
+			)
+		except Exception as e:
+			self.logger.warning(f'Failed to execute AI step: {e.__class__.__name__}: {e}')
+			self.logger.debug('Full error traceback:', exc_info=True)
+			return ActionResult(error=f'AI step failed: {e}')
+
 	async def rerun_history(
 		self,
 		history: AgentHistoryList,
@@ -2267,6 +2453,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		skip_failures: bool = True,
 		delay_between_actions: float = 2.0,
 		summary_llm: BaseChatModel | None = None,
+		ai_step_llm: BaseChatModel | None = None,
 	) -> list[ActionResult]:
 		"""
 		Rerun a saved history of actions with error handling and retry logic.
@@ -2277,6 +2464,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		                skip_failures: Whether to skip failed actions or stop execution
 		                delay_between_actions: Delay between actions in seconds
 		                summary_llm: Optional LLM to use for generating the final summary. If not provided, uses the agent's LLM
+		                ai_step_llm: Optional LLM to use for AI steps (extract actions). If not provided, uses the agent's LLM
 
 		Returns:
 		                List of action results (including AI summary as the final result)
@@ -2325,7 +2513,7 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			retry_count = 0
 			while retry_count < max_retries:
 				try:
-					result = await self._execute_history_step(history_item, step_delay)
+					result = await self._execute_history_step(history_item, step_delay, ai_step_llm)
 					results.extend(result)
 					break
 
@@ -2398,28 +2586,66 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 			self.logger.debug('📝 Saved initial actions to history as step 0')
 			self.logger.debug('Initial actions completed')
 
-	async def _execute_history_step(self, history_item: AgentHistory, delay: float) -> list[ActionResult]:
-		"""Execute a single step from history with element validation"""
+	async def _execute_history_step(
+		self, history_item: AgentHistory, delay: float, ai_step_llm: BaseChatModel | None = None
+	) -> list[ActionResult]:
+		"""Execute a single step from history with element validation.
+
+		For extract actions, uses AI to re-evaluate the content since page content may have changed.
+		"""
 		assert self.browser_session is not None, 'BrowserSession is not set up'
 
 		await asyncio.sleep(delay)
 		state = await self.browser_session.get_browser_state_summary(include_screenshot=False)
 		if not state or not history_item.model_output:
 			raise ValueError('Invalid state or model output')
-		updated_actions = []
+
+		results = []
+		pending_actions = []
+
 		for i, action in enumerate(history_item.model_output.action):
-			updated_action = await self._update_action_indices(
-				history_item.state.interacted_element[i],
-				action,
-				state,
-			)
-			updated_actions.append(updated_action)
+			# Check if this is an extract action - use AI step instead
+			action_data = action.model_dump(exclude_unset=True)
+			action_name = next(iter(action_data.keys()), None)
 
-			if updated_action is None:
-				raise ValueError(f'Could not find matching element {i} in current page')
+			if action_name == 'extract':
+				# Execute any pending actions first to maintain correct order
+				# (e.g., if step is [click, extract], click must happen before extract)
+				if pending_actions:
+					batch_results = await self.multi_act(pending_actions)
+					results.extend(batch_results)
+					pending_actions = []
 
-		result = await self.multi_act(updated_actions)
-		return result
+				# Now execute AI step for extract action
+				extract_params = action_data['extract']
+				query = extract_params.get('query', '')
+				extract_links = extract_params.get('extract_links', False)
+
+				self.logger.info(f'🤖 Using AI step for extract action: {query[:50]}...')
+				ai_result = await self._execute_ai_step(
+					query=query,
+					include_screenshot=False,  # Match original extract behavior
+					extract_links=extract_links,
+					ai_step_llm=ai_step_llm,
+				)
+				results.append(ai_result)
+			else:
+				# For non-extract actions, update indices and collect for batch execution
+				updated_action = await self._update_action_indices(
+					history_item.state.interacted_element[i],
+					action,
+					state,
+				)
+				if updated_action is None:
+					raise ValueError(f'Could not find matching element {i} in current page')
+				pending_actions.append(updated_action)
+
+		# Execute any remaining pending actions
+		if pending_actions:
+			batch_results = await self.multi_act(pending_actions)
+			results.extend(batch_results)
+
+		return results
 
 	async def _update_action_indices(
 		self,
