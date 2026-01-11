@@ -120,7 +120,7 @@ class Tools(Generic[Context]):
 
 		# Basic Navigation Actions
 		@self.registry.action(
-			'',
+			'Open search results directly for a query using the chosen engine (avoids typing into search fields).',
 			param_model=SearchAction,
 		)
 		async def search(params: SearchAction, browser_session: BrowserSession):
@@ -132,7 +132,7 @@ class Tools(Generic[Context]):
 			# Build search URL based on search engine
 			search_engines = {
 				'duckduckgo': f'https://duckduckgo.com/?q={encoded_query}',
-				'google': f'https://www.google.com/search?q={encoded_query}&udm=14',
+				'google': f'https://www.google.com/search?q={encoded_query}',
 				'bing': f'https://www.bing.com/search?q={encoded_query}',
 			}
 
