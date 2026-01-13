@@ -1,7 +1,14 @@
 """Test Browser Use model button click."""
 
+import os
+
+import pytest
+
 from browser_use.llm.browser_use.chat import ChatBrowserUse
 from tests.ci.models.model_test_helper import run_model_button_click_test
+
+LOCAL_ONLY = os.getenv('BROWSER_USE_LOCAL_ONLY', '').lower() in {'1', 'true', 'yes'}
+pytestmark = pytest.mark.skipif(LOCAL_ONLY, reason='Local-only mode enabled')
 
 
 async def test_browseruse_bu_latest(httpserver):

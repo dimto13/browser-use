@@ -46,6 +46,9 @@ class StorageStateWatchdog(BaseWatchdog):
 	_last_cookie_state: list[dict] = PrivateAttr(default_factory=list)
 	_save_lock: asyncio.Lock = PrivateAttr(default_factory=asyncio.Lock)
 
+	def _has_root_cdp(self) -> bool:
+		return getattr(self.browser_session, '_cdp_client_root', None) is not None
+
 	async def on_BrowserConnectedEvent(self, event: BrowserConnectedEvent) -> None:
 		"""Start monitoring when browser starts."""
 		self.logger.debug('[StorageStateWatchdog] 🍪 Initializing auth/cookies sync <-> with storage_state.json file')
@@ -90,7 +93,9 @@ class StorageStateWatchdog(BaseWatchdog):
 		if self._monitoring_task and not self._monitoring_task.done():
 			return
 
-		assert self.browser_session.cdp_client is not None
+		if not self._has_root_cdp():
+			self.logger.debug('[StorageStateWatchdog] No root CDP client available; skipping monitoring start')
+			return
 
 		self._monitoring_task = create_task_with_error_handling(
 			self._monitor_storage_changes(), name='monitor_storage_changes', logger_instance=self.logger, suppress_exceptions=True
@@ -143,7 +148,7 @@ class StorageStateWatchdog(BaseWatchdog):
 
 	async def _have_cookies_changed(self) -> bool:
 		"""Check if cookies have changed since last save."""
-		if not self.browser_session.cdp_client:
+		if not self._has_root_cdp():
 			return False
 
 		try:
@@ -168,7 +173,14 @@ class StorageStateWatchdog(BaseWatchdog):
 		"""Save browser storage state to file."""
 		async with self._save_lock:
 			# Check if CDP client is available
-			assert await self.browser_session.get_or_create_cdp_session(target_id=None)
+			if not self._has_root_cdp():
+				self.logger.debug('[StorageStateWatchdog] No root CDP client available; skipping storage save')
+				return
+			try:
+				await self.browser_session.get_or_create_cdp_session(target_id=None)
+			except Exception as e:
+				self.logger.debug(f'[StorageStateWatchdog] No CDP session available; skipping storage save: {e}')
+				return
 
 			save_path = path or self.browser_session.browser_profile.storage_state
 			if not save_path:
@@ -232,8 +244,8 @@ class StorageStateWatchdog(BaseWatchdog):
 
 	async def _load_storage_state(self, path: str | None = None) -> None:
 		"""Load browser storage state from file."""
-		if not self.browser_session.cdp_client:
-			self.logger.warning('[StorageStateWatchdog] No CDP client available for loading')
+		if not self._has_root_cdp():
+			self.logger.debug('[StorageStateWatchdog] No root CDP client available for loading')
 			return
 
 		load_path = path or self.browser_session.browser_profile.storage_state

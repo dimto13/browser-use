@@ -83,6 +83,29 @@ eval = [
 cli-oci = ["browser-use[cli,oci]"]
 all = ["browser-use[cli,examples,aws,oci]"]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.11.2",
+    "tokencost>=0.1.16",
+    "build>=1.2.2",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-httpserver>=1.0.8",
+    "fastapi>=0.115.8",
+    "inngest>=0.4.19",
+    "uvicorn>=0.34.0",
+    "ipdb>=0.13.13",
+    "pre-commit>=4.2.0",
+    "codespell>=2.4.1",
+    "pyright>=1.1.403",
+    "ty>=0.0.1a1",
+    "pytest-xdist>=3.7.0",
+    "lmnr[all]==0.7.17",
+    # "pytest-playwright-asyncio>=0.7.0",  # not actually needed I think
+    "pytest-timeout>=2.4.0",
+    "pydantic_settings>=2.10.1",
+]
+
 # will prefer to use local source code checked out in ../../browser-use (if present) instead of pypi browser-use package
 # [tool.uv.sources]
 # bubus = { path = "../bubus", editable = true }
@@ -185,7 +208,7 @@ markers = [
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
-addopts = "-svx --strict-markers --tb=short --dist=loadscope"
+addopts = "-sv --strict-markers --tb=short --dist=loadscope"
 log_cli = true
 log_cli_format = "%(levelname)-8s [%(name)s] %(message)s"
 filterwarnings = [
@@ -208,24 +231,3 @@ allow-direct-references = true
 #     "sys_platform == 'win32' and platform_machine == 'x86_64'",
 #     # "sys_platform == 'win32' and platform_machine == 'arm64'",  # no pytorch wheels available yet
 # ]
-dev-dependencies = [
-    "ruff>=0.11.2",
-    "tokencost>=0.1.16",
-    "build>=1.2.2",
-    "pytest>=8.3.5",
-    "pytest-asyncio>=1.0.0",
-    "pytest-httpserver>=1.0.8",
-    "fastapi>=0.115.8",
-    "inngest>=0.4.19",
-    "uvicorn>=0.34.0",
-    "ipdb>=0.13.13",
-    "pre-commit>=4.2.0",
-    "codespell>=2.4.1",
-    "pyright>=1.1.403",
-    "ty>=0.0.1a1",
-    "pytest-xdist>=3.7.0",
-    "lmnr[all]==0.7.17",
-    # "pytest-playwright-asyncio>=0.7.0",  # not actually needed I think
-    "pytest-timeout>=2.4.0",
-    "pydantic_settings>=2.10.1",
-]

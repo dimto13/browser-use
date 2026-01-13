@@ -23,6 +23,7 @@ from pytest_httpserver import HTTPServer
 from browser_use.agent.service import Agent
 from browser_use.browser import BrowserSession
 from browser_use.browser.profile import BrowserProfile
+from browser_use.llm.ollama.chat import ChatOllama
 
 
 @pytest.fixture(scope='session')
@@ -78,12 +79,18 @@ class TestRadioButtons:
 		"""Test that agent can click radio buttons by checking for secret message."""
 
 		task = f"Go to {base_url}/radio-test and click on the 'Blue' radio button and the 'Dog' radio button. After clicking both buttons, look for any text message that appears on the page and report exactly what you see."
+		model = os.getenv('TEXT_LLM_MODEL') or os.getenv('BROWSER_USE_LLM_MODEL')
+		if not model:
+			pytest.skip('Set TEXT_LLM_MODEL or BROWSER_USE_LLM_MODEL for local ChatOllama tests.')
+		llm = ChatOllama(model=model, host=os.getenv('OLLAMA_ENDPOINT'))
 
 		agent = Agent(
 			task=task,
+			llm=llm,
 			browser_session=browser_session,
 			max_actions_per_step=5,
 			flash_mode=True,
+			use_judge=False,
 		)
 
 		# Run the agent

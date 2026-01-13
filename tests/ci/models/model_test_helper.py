@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+from browser_use.llm.ollama.chat import ChatOllama
+
 from browser_use.agent.service import Agent
 from browser_use.browser.profile import BrowserProfile
 from browser_use.browser.session import BrowserSession
@@ -25,6 +27,10 @@ async def run_model_button_click_test(
 	4. Completes within max 2 steps
 	"""
 	# Handle API key validation - skip test if not available
+	local_only = os.getenv('BROWSER_USE_LOCAL_ONLY', '').lower() in {'1', 'true', 'yes'}
+	if local_only and model_class is not ChatOllama:
+		pytest.skip('Local-only mode enabled; skipping remote provider model test')
+
 	if api_key_env is not None:
 		api_key = os.getenv(api_key_env)
 		if not api_key:

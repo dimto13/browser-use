@@ -27,6 +27,10 @@ from browser_use.tools.service import Tools
 # Load environment variables before any imports
 load_dotenv()
 
+# Default to local-only test mode unless explicitly overridden.
+if 'BROWSER_USE_LOCAL_ONLY' not in os.environ:
+	os.environ['BROWSER_USE_LOCAL_ONLY'] = 'true'
+
 
 # Skip LLM API key verification for tests
 os.environ['SKIP_LLM_API_KEY_VERIFICATION'] = 'true'
@@ -51,12 +55,15 @@ def setup_test_environment():
 	test_env_vars = {
 		'SKIP_LLM_API_KEY_VERIFICATION': 'true',
 		'ANONYMIZED_TELEMETRY': 'false',
+		'BROWSER_USE_DISABLE_JUDGE': 'true',
 		'BROWSER_USE_CLOUD_SYNC': 'true',
 		'BROWSER_USE_CLOUD_API_URL': 'http://placeholder-will-be-replaced-by-specific-test-fixtures',
 		'BROWSER_USE_CLOUD_UI_URL': 'http://placeholder-will-be-replaced-by-specific-test-fixtures',
 		# Don't set BROWSER_USE_CONFIG_DIR anymore - let it use the default ~/.config/browseruse
 		# This way extensions will be cached in ~/.config/browseruse/extensions
 	}
+	if 'BROWSER_USE_LOCAL_ONLY' not in os.environ:
+		test_env_vars['BROWSER_USE_LOCAL_ONLY'] = 'true'
 
 	for key, value in test_env_vars.items():
 		original_env[key] = os.environ.get(key)

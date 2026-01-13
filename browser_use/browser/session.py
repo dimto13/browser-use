@@ -985,6 +985,9 @@ class BrowserSession(BaseModel):
 	async def on_AgentFocusChangedEvent(self, event: AgentFocusChangedEvent) -> None:
 		"""Handle agent focus change - update focus and clear cache."""
 		self.logger.debug(f'🔄 AgentFocusChangedEvent received: target_id=...{event.target_id[-4:]} url={event.url}')
+		if self._cdp_client_root is None:
+			self.logger.debug('🔄 No root CDP client available; skipping focus change handling')
+			return
 
 		# Clear cached DOM state since focus changed
 		if self._dom_watchdog:

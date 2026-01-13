@@ -143,6 +143,115 @@ uvx browser-use init --template default --output my_agent.py
 
 <br/>
 
+# Local runner for this repo (browser-use-dim)
+
+This repository adds a local runner that uses Ollama and writes results into `output-results/`.
+It is driven by environment variables and a single entry script.
+
+## Entry points
+
+- `run_browser_with_ollama.sh` (recommended): uses `venv-browse-dim` and runs `main/run_browser_tool.py`
+- `main/run_browser_tool.py` (direct python entry, supports inference when TASK_MODE is omitted)
+
+## Environment variables
+
+- `TASK` (required for single runs): task text for the agent.
+- `TASK_MODE`: `google_search` or `direct_url`.
+  - Note: `run_browser_with_ollama.sh` defaults this to `google_search`. For direct URL runs, set it explicitly.
+- `TASK_URL`: direct URL used when `TASK_MODE=direct_url`.
+- `SEARCH_QUERY`: overrides the query when `TASK_MODE=google_search`.
+- `OUTPUT_PATH`: output markdown file (default: `output-results/output.md`).
+- `RUN_USECASES=1`: run built-in usecases and ignore custom TASK/TASK_MODE.
+- `TEXT_LLM_MODEL` or `BROWSER_USE_LLM_MODEL`: Ollama model name.
+- `OLLAMA_ENDPOINT`: Ollama host (default: `http://localhost:11434`).
+- `LLM_TIMEOUT`, `AGENT_MAX_STEPS`, `AGENT_STEP_TIMEOUT`, `AGENT_USE_JUDGE`: quality and timeout tuning.
+
+## Parameter combinations and examples
+
+Google search (default):
+```bash
+TASK="finde den aktuellen preis von XAUUSD" ./run_browser_with_ollama.sh
+```
+
+Google search with explicit query override:
+```bash
+TASK="preise heute" SEARCH_QUERY="XAUUSD price today" ./run_browser_with_ollama.sh
+```
+
+Direct URL:
+```bash
+TASK_MODE=direct_url TASK_URL="https://www.amazon.de" TASK="finde die guenstigste nvidia 3090" ./run_browser_with_ollama.sh
+```
+
+Built-in usecases (writes to `output-results/output-uc-direct.md` and `output-results/output-uc-google.md`):
+```bash
+RUN_USECASES=1 ./run_browser_with_ollama.sh
+```
+
+Custom output file:
+```bash
+TASK="..." OUTPUT_PATH="output-results/custom-output.md" ./run_browser_with_ollama.sh
+```
+
+Direct python invocation with inferred mode (TASK_MODE omitted):
+```bash
+TASK="finde das wetter in muenchen" python main/run_browser_tool.py
+```
+
+## Outputs
+
+- `output-results/output.md` for single runs
+- `output-results/output-uc-direct.md` and `output-results/output-uc-google.md` for usecases
+
+## Test runs (local-only by default)
+
+Local-only mode skips remote-provider model tests. You can override by setting `BROWSER_USE_LOCAL_ONLY=false`
+and providing provider API keys.
+
+```bash
+source ./venv-browse-dim/bin/activate
+export UV_CACHE_DIR="$PWD/.uv-cache"
+uv run --active --no-sync pytest -q
+```
+
+## Workflows (mermaid)
+
+```mermaid
+flowchart TD
+    A[run_browser_with_ollama.sh] --> B{RUN_USECASES=1?}
+    B -- yes --> C[Run uc-direct and uc-google]
+    C --> D[Write output-results/output-uc-direct.md and output-uc-google.md]
+    B -- no --> E{TASK_MODE set?}
+    E -- no --> F{TASK_URL set?}
+    F -- yes --> G[Mode = direct_url]
+    F -- no --> H[Mode = google_search]
+    E -- yes --> I[Mode = TASK_MODE]
+    G --> J{Amazon 3090 task?}
+    I --> J
+    H --> K{News task?}
+    J -- yes --> L[Amazon DOM extraction]
+    J -- no --> M[Agent with Ollama]
+    K -- yes --> N[Google extract + headline fetch]
+    K -- no --> M
+    L --> O[Write OUTPUT_PATH]
+    M --> O
+    N --> O
+```
+
+```mermaid
+flowchart TD
+    T[pytest] --> L{BROWSER_USE_LOCAL_ONLY=true?}
+    L -- yes --> S[Skip provider model tests]
+    L -- no --> K{Provider API key set?}
+    K -- no --> S2[Skip that provider tests]
+    K -- yes --> R[Run provider tests]
+    S --> U[Run remaining unit/integration tests]
+    S2 --> U
+    R --> U
+```
+
+<br/>
+
 # Demos
 
 

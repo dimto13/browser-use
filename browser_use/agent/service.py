@@ -3,6 +3,7 @@ import gc
 import inspect
 import json
 import logging
+import os
 import re
 import tempfile
 import time
@@ -353,6 +354,9 @@ class Agent(Generic[Context, AgentStructuredOutput]):
 		self.directly_open_url = directly_open_url
 		self.include_recent_events = include_recent_events
 		self._url_shortening_limit = _url_shortening_limit
+
+		if os.getenv('BROWSER_USE_DISABLE_JUDGE', '').lower() in {'1', 'true', 'yes'}:
+			use_judge = False
 
 		self.sensitive_data = sensitive_data
 

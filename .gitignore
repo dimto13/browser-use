@@ -12,6 +12,7 @@ __pycache__/
 # Virtual Environments
 .venv*
 venv/
+venv-browse-dim/
 
 # IDEs
 .vscode/
