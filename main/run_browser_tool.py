@@ -674,18 +674,22 @@ async def main() -> None:
 	root = Path(__file__).resolve().parent.parent
 	output_dir = root / 'output-results'
 	run_usecases = os.getenv('RUN_USECASES', '0') == '1'
+	force_usecases = os.getenv('RUN_USECASES_FORCE', '0') == '1'
+	task_explicit = os.getenv('TASK_EXPLICIT', '0') == '1'
 
-	if run_usecases:
+	if run_usecases and (force_usecases or not task_explicit):
 		for spec in _default_usecases(root):
 			print(f'Running usecase: {spec.name}')
 			await run_task(spec)
 		return
+	if run_usecases and task_explicit and not force_usecases:
+		print('RUN_USECASES=1 ignored because TASK was set. Use RUN_USECASES_FORCE=1 to override.')
 
 	task = os.getenv('TASK', '').strip()
 	mode_raw = os.getenv('TASK_MODE', '').strip()
 	start_url = os.getenv('TASK_URL', '').strip() or None
 	output_path = Path(os.getenv('OUTPUT_PATH', str(output_dir / 'output.md')))
-	search_query = os.getenv('SEARCH_QUERY', '').strip() or None
+	search_query = None
 
 	if not task:
 		raise SystemExit('TASK is required unless RUN_USECASES=1')

@@ -15,10 +15,10 @@ Task: Finde die fuenf wichtigsten Nachrichtendienste, die Live-Nachrichten anbie
       "notes": null
     },
     {
-      "service": "www.n-tv.de",
-      "url": "https://www.n-tv.de/mediathek/livestream/24-Stunden-ntv-Livestream-article9511936.html",
-      "latest_headline": "24 Stunden ntv Livestream",
-      "source_url": "https://www.n-tv.de/mediathek/livestream/24-Stunden-ntv-Livestream-article9511936.html",
+      "service": "www.ardmediathek.de",
+      "url": "https://www.ardmediathek.de/live/Y3JpZDovL2Rhc2Vyc3RlLmRlL3RhZ2Vzc2NoYXUvbGl2ZXN0cmVhbQ",
+      "latest_headline": "Sechs Tage Eiszeit - Der Katastrophenwinter 1978/79",
+      "source_url": "https://www.ardmediathek.de/live/Y3JpZDovL2Rhc2Vyc3RlLmRlL3RhZ2Vzc2NoYXUvbGl2ZXN0cmVhbQ",
       "notes": null
     },
     {
@@ -29,17 +29,17 @@ Task: Finde die fuenf wichtigsten Nachrichtendienste, die Live-Nachrichten anbie
       "notes": null
     },
     {
-      "service": "www.deutschlandfunk.de",
-      "url": "https://www.deutschlandfunk.de/nachrichten-100.html",
-      "latest_headline": "Aktuelle Berichte und Hintergründe",
-      "source_url": "https://www.deutschlandfunk.de/nachrichten-100.html",
-      "notes": null
-    },
-    {
       "service": "www.welt.de",
       "url": "https://www.welt.de/tv-programm-live-stream/",
       "latest_headline": "WELT TV: Live-Stream & TV-Programm - Nachrichtensender - Ehemals N24",
       "source_url": "https://www.welt.de/tv-programm-live-stream/",
+      "notes": null
+    },
+    {
+      "service": "www.deutschlandfunk.de",
+      "url": "https://www.deutschlandfunk.de/nachrichten-100.html",
+      "latest_headline": "Aktuelle Berichte und Hintergründe",
+      "source_url": "https://www.deutschlandfunk.de/nachrichten-100.html",
       "notes": null
     }
   ],
@@ -51,7 +51,7 @@ Task: Finde die fuenf wichtigsten Nachrichtendienste, die Live-Nachrichten anbie
 
 - https://www.google.com/search?q=live+nachrichten+dienst
 - https://www.tagesschau.de/thema/livestream
-- https://www.n-tv.de/mediathek/livestream/24-Stunden-ntv-Livestream-article9511936.html
+- https://www.ardmediathek.de/live/Y3JpZDovL2Rhc2Vyc3RlLmRlL3RhZ2Vzc2NoYXUvbGl2ZXN0cmVhbQ
 - https://www.zdf.de/magazine/zdfheute-live-102
-- https://www.deutschlandfunk.de/nachrichten-100.html
 - https://www.welt.de/tv-programm-live-stream/
+- https://www.deutschlandfunk.de/nachrichten-100.html

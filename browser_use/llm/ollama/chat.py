@@ -96,4 +96,6 @@ class ChatOllama(BaseChatModel):
 				return ChatInvokeCompletion(completion=completion, usage=None)
 
 		except Exception as e:
-			raise ModelProviderError(message=str(e), model=self.name) from e
+			host = self.host or 'http://localhost:11434'
+			message = f'Ollama error (host={host}, model={self.model}): {e}'
+			raise ModelProviderError(message=message, model=self.name) from e

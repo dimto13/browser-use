@@ -153,15 +153,31 @@ It is driven by environment variables and a single entry script.
 - `run_browser_with_ollama.sh` (recommended): uses `venv-browse-dim` and runs `main/run_browser_tool.py`
 - `main/run_browser_tool.py` (direct python entry, supports inference when TASK_MODE is omitted)
 
+## Simple usage (no env vars needed)
+
+```bash
+./run_browser_with_ollama.sh "finde den aktuellen preis von XAUUSD"
+```
+
+Direct URL:
+```bash
+./run_browser_with_ollama.sh --url https://www.amazon.de "finde die guenstigste nvidia 3090"
+```
+
+Run the built-in usecases:
+```bash
+./run_browser_with_ollama.sh --usecases
+```
+
 ## Environment variables
 
 - `TASK` (required for single runs): task text for the agent.
 - `TASK_MODE`: `google_search` or `direct_url`.
   - Note: `run_browser_with_ollama.sh` defaults this to `google_search`. For direct URL runs, set it explicitly.
 - `TASK_URL`: direct URL used when `TASK_MODE=direct_url`.
-- `SEARCH_QUERY`: overrides the query when `TASK_MODE=google_search`.
 - `OUTPUT_PATH`: output markdown file (default: `output-results/output.md`).
 - `RUN_USECASES=1`: run built-in usecases and ignore custom TASK/TASK_MODE.
+- `RUN_USECASES_FORCE=1`: force usecases even when TASK is explicitly set.
 - `TEXT_LLM_MODEL` or `BROWSER_USE_LLM_MODEL`: Ollama model name.
 - `OLLAMA_ENDPOINT`: Ollama host (default: `http://localhost:11434`).
 - `LLM_TIMEOUT`, `AGENT_MAX_STEPS`, `AGENT_STEP_TIMEOUT`, `AGENT_USE_JUDGE`: quality and timeout tuning.
@@ -173,11 +189,6 @@ Google search (default):
 TASK="finde den aktuellen preis von XAUUSD" ./run_browser_with_ollama.sh
 ```
 
-Google search with explicit query override:
-```bash
-TASK="preise heute" SEARCH_QUERY="XAUUSD price today" ./run_browser_with_ollama.sh
-```
-
 Direct URL:
 ```bash
 TASK_MODE=direct_url TASK_URL="https://www.amazon.de" TASK="finde die guenstigste nvidia 3090" ./run_browser_with_ollama.sh
@@ -186,6 +197,11 @@ TASK_MODE=direct_url TASK_URL="https://www.amazon.de" TASK="finde die guenstigst
 Built-in usecases (writes to `output-results/output-uc-direct.md` and `output-results/output-uc-google.md`):
 ```bash
 RUN_USECASES=1 ./run_browser_with_ollama.sh
+```
+
+Force usecases even if TASK is set in the environment:
+```bash
+RUN_USECASES=1 RUN_USECASES_FORCE=1 ./run_browser_with_ollama.sh
 ```
 
 Custom output file:
